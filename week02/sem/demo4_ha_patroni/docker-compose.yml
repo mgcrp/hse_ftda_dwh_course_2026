@@ -1,0 +1,143 @@
+name: demo4-ha
+
+x-patroni: &patroni
+  build:
+    context: ./patroni
+  user: postgres
+  environment: &patroni-env
+    PATRONI_SCOPE: hse-cluster
+    PATRONI_SUPERUSER_USERNAME: postgres
+    PATRONI_SUPERUSER_PASSWORD: postgres
+    PATRONI_REPLICATION_USERNAME: replicator
+    PATRONI_REPLICATION_PASSWORD: replicator
+    PATRONI_RESTAPI_USERNAME: patroni
+    PATRONI_RESTAPI_PASSWORD: patroni
+  restart: unless-stopped
+  healthcheck:
+    test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8008/health >/dev/null"]
+    interval: 5s
+    timeout: 3s
+    retries: 30
+
+services:
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.21
+    container_name: etcd
+    environment:
+      ETCD_NAME: etcd0
+      ETCD_DATA_DIR: /etcd-data
+      ETCD_LISTEN_CLIENT_URLS: http://0.0.0.0:2379
+      ETCD_ADVERTISE_CLIENT_URLS: http://etcd:2379
+      ETCD_LISTEN_PEER_URLS: http://0.0.0.0:2380
+      ETCD_INITIAL_ADVERTISE_PEER_URLS: http://etcd:2380
+      ETCD_INITIAL_CLUSTER: etcd0=http://etcd:2380
+      ETCD_INITIAL_CLUSTER_STATE: new
+      ETCD_INITIAL_CLUSTER_TOKEN: hse-etcd
+      # ВНИМАНИЕ: аутентификация выключена - это учебный стенд.
+      # В проде: --client-cert-auth, --trusted-ca-file, RBAC.
+      # API v2 не включаем: он выпилен в etcd 3.6, Patroni работает по v3.
+      ALLOW_NONE_AUTHENTICATION: "yes"
+    networks:
+      db_netw:
+        ipv4_address: 10.5.0.2
+    ports: ["2379:2379"]
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  pg-patroni-1:
+    <<: *patroni
+    container_name: pg-patroni-1
+    hostname: pg-patroni-1
+    depends_on:
+      etcd: { condition: service_healthy }
+    environment:
+      <<: *patroni-env
+      PATRONI_NAME: pg-patroni-1
+      PATRONI_RESTAPI_CONNECT_ADDRESS: pg-patroni-1:8008
+      PATRONI_POSTGRESQL_CONNECT_ADDRESS: pg-patroni-1:5432
+    volumes: [pg1_data:/var/lib/postgresql]
+    networks: { db_netw: { ipv4_address: 10.5.0.5 } }
+    ports: ["5432:5432", "8008:8008"]
+
+  pg-patroni-2:
+    <<: *patroni
+    container_name: pg-patroni-2
+    hostname: pg-patroni-2
+    depends_on:
+      etcd: { condition: service_healthy }
+    environment:
+      <<: *patroni-env
+      PATRONI_NAME: pg-patroni-2
+      PATRONI_RESTAPI_CONNECT_ADDRESS: pg-patroni-2:8008
+      PATRONI_POSTGRESQL_CONNECT_ADDRESS: pg-patroni-2:5432
+    volumes: [pg2_data:/var/lib/postgresql]
+    networks: { db_netw: { ipv4_address: 10.5.0.6 } }
+    ports: ["5433:5432", "8009:8008"]
+
+  pg-patroni-3:
+    <<: *patroni
+    container_name: pg-patroni-3
+    hostname: pg-patroni-3
+    depends_on:
+      etcd: { condition: service_healthy }
+    environment:
+      <<: *patroni-env
+      PATRONI_NAME: pg-patroni-3
+      PATRONI_RESTAPI_CONNECT_ADDRESS: pg-patroni-3:8008
+      PATRONI_POSTGRESQL_CONNECT_ADDRESS: pg-patroni-3:5432
+    volumes: [pg3_data:/var/lib/postgresql]
+    networks: { db_netw: { ipv4_address: 10.5.0.7 } }
+    ports: ["5434:5432", "8010:8008"]
+
+  haproxy:
+    image: haproxy:3.2-alpine
+    container_name: haproxy
+    depends_on: [pg-patroni-1, pg-patroni-2, pg-patroni-3]
+    volumes:
+      - ./haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    networks: { db_netw: { ipv4_address: 10.5.0.9 } }
+    ports:
+      - "5005:5005"   # запись -> текущий лидер
+      - "5001:5001"   # чтение -> реплики
+      - "7005:7005"   # статистика в браузере
+    restart: unless-stopped
+
+  pgbouncer:
+    image: edoburu/pgbouncer:v1.25.2-p0
+    container_name: pgbouncer
+    depends_on: [haproxy]
+    volumes:
+      - ./pgbouncer/pgbouncer.ini:/etc/pgbouncer/pgbouncer.ini
+      - ./pgbouncer/userlist.txt:/etc/pgbouncer/userlist.txt
+    networks: { db_netw: { ipv4_address: 10.5.0.10 } }
+    ports: ["6432:6432"]
+    restart: unless-stopped
+
+  # Контейнер для сценариев (psql внутри).
+  pg_cli:
+    image: postgres:18
+    container_name: ha_client
+    environment:
+      PGPASSWORD: postgres
+      PGUSER: postgres
+    volumes:
+      - ./scripts:/scripts:ro
+    networks: { db_netw: {} }
+    entrypoint: ["/bin/bash"]
+    profiles: ["tools"]
+
+networks:
+  db_netw:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.5.0.0/16
+          gateway: 10.5.0.1
+
+volumes:
+  pg1_data:
+  pg2_data:
+  pg3_data:

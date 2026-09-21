@@ -1,0 +1,87 @@
+name: demo3-pgbouncer
+
+x-pg-env: &pg-env
+  POSTGRES_USER: postgres
+  POSTGRES_PASSWORD: postgres
+  POSTGRES_DB: shop
+  PGDATA: /var/lib/postgresql/18/docker
+
+services:
+  postgres:
+    image: postgres:18
+    container_name: demo3_postgres
+    environment: *pg-env
+    # Специально зажимаем базу: 20 коннектов, из них 3 зарезервированы под superuser.
+    # Это имитирует прод, где max_connections упирается в RAM (каждый бэкенд - отдельный процесс).
+    command:
+      - postgres
+      - -c
+      - max_connections=20
+      - -c
+      - superuser_reserved_connections=3
+      - -c
+      - log_connections=on
+      - -c
+      - log_disconnections=on
+    volumes:
+      - pgdata:/var/lib/postgresql
+      - ./init:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d shop"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  pgbouncer:
+    image: edoburu/pgbouncer:v1.25.2-p0
+    container_name: demo3_pgbouncer
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./pgbouncer/pgbouncer.ini:/etc/pgbouncer/pgbouncer.ini
+      - ./pgbouncer/userlist.txt:/etc/pgbouncer/userlist.txt
+    ports:
+      - "6432:6432"
+    healthcheck:
+      test: ["CMD-SHELL", "PGPASSWORD=postgres psql -h 127.0.0.1 -p 6432 -U postgres -d pgbouncer -tAc 'SHOW LISTS;' >/dev/null"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  pg_cli:
+    image: postgres:18
+    container_name: demo3_pg_cli
+    depends_on:
+      pgbouncer:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: app
+      PGUSER: app
+      PGDATABASE: shop
+      ADMIN_USER: postgres
+      ADMIN_PASS: postgres
+    volumes:
+      - ./scripts:/scripts:ro
+    entrypoint: ["/bin/bash"]
+    command: ["-c", "echo 'Запускай: docker compose run --rm pg_cli /scripts/01_flood.sh direct'"]
+    profiles: ["tools"]
+
+  # Живой дашборд для проектора.
+  watcher:
+    image: postgres:18
+    container_name: demo3_watcher
+    depends_on:
+      pgbouncer:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: postgres
+    volumes:
+      - ./scripts:/scripts:ro
+    entrypoint: ["/bin/bash", "/scripts/00_watch.sh"]
+    restart: unless-stopped
+
+volumes:
+  pgdata:

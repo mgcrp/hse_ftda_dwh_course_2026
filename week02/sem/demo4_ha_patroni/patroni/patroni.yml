@@ -1,0 +1,57 @@
+scope: hse-cluster
+
+etcd3:
+  hosts: etcd:2379
+
+# watchdog - сторожевой таймер ОС: если Patroni завис, ядро перезагрузит узел,
+# чтобы "мёртвый" лидер гарантированно не писал. В Docker его нет, выключаем.
+# В проде на железе/VM watchdog включают: это защита от split-brain.
+watchdog:
+  mode: off
+
+restapi:
+  listen: 0.0.0.0:8008
+
+bootstrap:
+  # Эта секция применяется ОДИН РАЗ, при инициализации кластера.
+  # Дальше конфигурация живёт в DCS (etcd) и меняется через patronictl edit-config.
+  dcs:
+    ttl: 30                            # сколько лидер живёт без продления аренды
+    loop_wait: 10                      # как часто Patroni просыпается
+    retry_timeout: 10                  # сколько терпим недоступность etcd/postgres
+    maximum_lag_on_failover: 1048576   # 1 МБ: реплику с бОльшим отставанием в лидеры не берём
+    synchronous_mode: false            # см. README: как включить синхронную репликацию
+    postgresql:
+      use_pg_rewind: true              # быстро вернуть бывшего лидера в строй
+      use_slots: true
+      parameters:
+        max_connections: 200
+        wal_level: replica
+        hot_standby: 'on'
+        max_wal_senders: 10
+        max_replication_slots: 10
+        wal_keep_size: 128MB
+        max_slot_wal_keep_size: 1GB
+        password_encryption: scram-sha-256
+
+  initdb:
+    - encoding: UTF8
+    - data-checksums                   # контрольные суммы страниц: ловим тихую порчу данных
+    - auth-host: scram-sha-256
+
+postgresql:
+  data_dir: /var/lib/postgresql/18/data
+  bin_dir: /usr/lib/postgresql/18/bin
+  listen: 0.0.0.0:5432
+  pgpass: /tmp/pgpass
+  pg_hba:
+    - local   all             all                                     trust
+    - host    all             all             127.0.0.1/32            trust
+    - host    all             all             10.5.0.0/16             scram-sha-256
+    - host    replication     replicator      10.5.0.0/16             scram-sha-256
+
+tags:
+  nofailover: false
+  noloadbalance: false
+  clonefrom: false
+  nosync: false

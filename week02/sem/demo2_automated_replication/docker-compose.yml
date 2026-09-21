@@ -1,0 +1,69 @@
+name: demo2-auto
+
+x-common: &common
+  image: postgres:18
+  environment: &pgenv
+    POSTGRES_USER: postgres
+    POSTGRES_PASSWORD: postgres
+    PGDATA: /var/lib/postgresql/18/docker
+  healthcheck:
+    test: ["CMD-SHELL", "pg_isready -U postgres"]
+    interval: 3s
+    timeout: 3s
+    retries: 30
+
+services:
+  postgres_master:
+    <<: *common
+    container_name: postgres_master
+    restart: unless-stopped
+    ports: ["5432:5432"]
+    volumes:
+      - master_data:/var/lib/postgresql
+      - ./config/postgresql.master.conf:/etc/postgresql/postgresql.conf:ro
+      - ./config/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
+      - ./init/01-replication.sql:/docker-entrypoint-initdb.d/01-replication.sql:ro
+    command: ["postgres", "-c", "config_file=/etc/postgresql/postgresql.conf"]
+
+  pg_cli:
+    image: postgres:18
+    container_name: pg_cli
+    user: postgres
+    depends_on:
+      postgres_master:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: replicator
+    volumes:
+      - replica_data:/var/lib/postgresql
+    entrypoint: ["bash", "-euc"]
+    command:
+      - |
+        TARGET=/var/lib/postgresql/18/docker
+        if [ -s "$$TARGET/PG_VERSION" ]; then
+          echo "реплика уже инициализирована - пропускаем pg_basebackup"
+          exit 0
+        fi
+        echo "снимаем базовый бэкап с мастера..."
+        pg_basebackup -h postgres_master -p 5432 -U replicator \
+                      -D "$$TARGET" -S replication_slot_1 \
+                      -X stream -Fp -R -P -v
+        echo "готово!"
+
+  postgres_replica:
+    <<: *common
+    container_name: postgres_replica
+    restart: unless-stopped
+    ports: ["5433:5432"]
+    depends_on:
+      pg_cli:
+        condition: service_completed_successfully
+    volumes:
+      - replica_data:/var/lib/postgresql
+      - ./config/postgresql.master.conf:/etc/postgresql/postgresql.conf:ro
+      - ./config/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
+    command: ["postgres", "-c", "config_file=/etc/postgresql/postgresql.conf"]
+
+volumes:
+  master_data:
+  replica_data:

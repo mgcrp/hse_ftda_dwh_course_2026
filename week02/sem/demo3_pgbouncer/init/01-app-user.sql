@@ -1,0 +1,3 @@
+CREATE ROLE app LOGIN PASSWORD 'app';
+GRANT ALL ON SCHEMA public TO app;
+ALTER SCHEMA public OWNER TO app;

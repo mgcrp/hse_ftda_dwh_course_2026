@@ -1,0 +1,40 @@
+name: demo1-manual
+
+x-common: &common
+  image: postgres:18
+  environment:
+    POSTGRES_USER: postgres
+    POSTGRES_PASSWORD: postgres
+    PGDATA: /var/lib/postgresql/18/docker
+  healthcheck:
+    test: ["CMD-SHELL", "pg_isready -U postgres"]
+    interval: 3s
+    timeout: 3s
+    retries: 20
+
+services:
+  postgres_master:
+    <<: *common
+    container_name: postgres_master
+    restart: unless-stopped
+    ports: ["5432:5432"]
+    volumes:
+      - master_data:/var/lib/postgresql
+      - ./config/postgresql.master.conf:/etc/postgresql/postgresql.conf:ro
+      - ./config/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
+    command: ["postgres", "-c", "config_file=/etc/postgresql/postgresql.conf"]
+
+  postgres_replica:
+    <<: *common
+    container_name: postgres_replica
+    restart: unless-stopped
+    ports: ["5433:5432"]
+    volumes:
+      - replica_data:/var/lib/postgresql
+      - ./config/postgresql.master.conf:/etc/postgresql/postgresql.conf:ro
+      - ./config/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
+    command: ["postgres", "-c", "config_file=/etc/postgresql/postgresql.conf"]
+
+volumes:
+  master_data:
+  replica_data:

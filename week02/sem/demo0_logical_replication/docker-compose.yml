@@ -1,0 +1,36 @@
+name: demo0-logical
+
+x-common: &common
+  image: postgres:18
+  restart: unless-stopped
+  environment:
+    POSTGRES_USER: postgres
+    POSTGRES_PASSWORD: postgres
+    PGDATA: /var/lib/postgresql/18/docker
+  healthcheck:
+    test: ["CMD-SHELL", "pg_isready -U postgres"]
+    interval: 3s
+    timeout: 3s
+    retries: 20
+
+services:
+  postgres_master:
+    <<: *common
+    container_name: postgres_master
+    # wal_level = logical нужен ТОЛЬКО на стороне публикации
+    command: ["postgres", "-c", "wal_level=logical"]
+    ports: ["5432:5432"]
+    volumes:
+      - master_data:/var/lib/postgresql
+
+  postgres_replica:
+    <<: *common
+    container_name: postgres_replica
+    # подписчику wal_level=logical не нужен - он обычная база
+    ports: ["5433:5432"]
+    volumes:
+      - replica_data:/var/lib/postgresql
+
+volumes:
+  master_data:
+  replica_data:
