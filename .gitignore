@@ -169,3 +169,5 @@ minio/
 data*/
 archive.zip
 breweries.csv
+
+hw_materials/*

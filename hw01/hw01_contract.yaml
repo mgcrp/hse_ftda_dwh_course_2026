@@ -1,0 +1,582 @@
+# ============================================================================
+#  КОНТРАКТ ИСТОЧНИКОВ — ДЗ №1, курс "Modern Storages and Data Warehousing"
+#  ФТиАД НИУ ВШЭ, 2026
+#
+#  Это единственный источник истины о том, что обязано быть доступно
+#  снаружи ваших баз. Физическую модель вы проектируете сами; контракт
+#  описывает, в каком виде вы отдаёте данные наружу.
+#
+#  Каждое представление живёт в схеме `contract` соответствующей базы.
+#  Допустимы VIEW или MATERIALIZED VIEW. Колонки обязаны называться
+#  точно так, как здесь; порядок колонок не важен; лишние колонки
+#  разрешены и игнорируются.
+#
+#  Типы: text | int | numeric | boolean | date | timestamptz
+#  Проверяется совместимость класса типа, а не точное имя типа
+#  (varchar(20) подходит под text, int8 под int, numeric(14,2) под numeric).
+# ============================================================================
+
+version: 1
+course: hse_ftda_dwh_2026
+homework: hw01
+schema: contract
+
+services:
+
+  # --------------------------------------------------------------------------
+  crm:
+    database_hint: crm_service_db
+    title: Клиенты и программа лояльности
+    views:
+
+      v_customer:
+        grain: один клиент
+        min_rows: 2000
+        columns:
+          customer_bk:      {type: text,        nullable: false, unique: true, note: "business key клиента"}
+          birth_year:       {type: int,         nullable: true,  note: "NULL, если клиент не указал"}
+          sex:              {type: text,        nullable: true,  note: "'M' | 'F' | NULL"}
+          city:             {type: text,        nullable: true}
+          region:           {type: text,        nullable: true}
+          loyalty_level:    {type: text,        nullable: true,  note: "текущий уровень программы"}
+          marketing_opt_in: {type: boolean,     nullable: false, note: "есть ли активное согласие на маркетинг"}
+          registered_at:    {type: timestamptz, nullable: false}
+          updated_at:       {type: timestamptz, nullable: false, note: "для инкрементальной выгрузки в ДЗ2"}
+        notes:
+          - "Клиенты с soft delete в представление НЕ попадают."
+          - "Отдаётся только текущее состояние клиента (не история)."
+
+      v_loyalty_card:
+        grain: одна карта лояльности
+        min_rows: 1500
+        columns:
+          card_bk:       {type: text,        nullable: false, unique: true}
+          customer_bk:   {type: text,        nullable: false}
+          issued_at:     {type: timestamptz, nullable: false}
+          closed_at:     {type: timestamptz, nullable: true}
+          status:        {type: text,        nullable: false, note: "'active' | 'blocked' | 'closed'"}
+          bonus_balance: {type: numeric,     nullable: false}
+          updated_at:    {type: timestamptz, nullable: false}
+
+  # --------------------------------------------------------------------------
+  catalog:
+    database_hint: catalog_service_db
+    title: Номенклатура и цены
+    views:
+
+      v_sku:
+        grain: одна товарная позиция, текущее состояние
+        min_rows: 500
+        columns:
+          sku:               {type: text,        nullable: false, unique: true}
+          sku_name:          {type: text,        nullable: false}
+          inn_name:          {type: text,        nullable: true,  note: "МНН / действующее вещество; NULL для нелекарственных позиций"}
+          manufacturer_name: {type: text,        nullable: false}
+          drug_form:         {type: text,        nullable: true,  note: "таблетки, раствор, мазь, ..."}
+          category:          {type: text,        nullable: false, note: "'rx' | 'otc' | 'supplement' | 'device' | 'cosmetics'"}
+          is_rx:             {type: boolean,     nullable: false, note: "текущий признак рецептурности"}
+          is_vital:          {type: boolean,     nullable: false, note: "входит в перечень ЖНВЛП"}
+          pack_qty:          {type: numeric,     nullable: false, note: "количество единиц в упаковке"}
+          is_active:         {type: boolean,     nullable: false}
+          updated_at:        {type: timestamptz, nullable: false}
+
+      v_price:
+        grain: одна версия цены (SCD2)
+        min_rows: 1500
+        columns:
+          sku:         {type: text,        nullable: false}
+          price_scope: {type: text,        nullable: false, note: "'chain' | 'region' | 'pharmacy'"}
+          scope_bk:    {type: text,        nullable: false, note: "'ALL' для chain, код региона, либо pharmacy_bk"}
+          price:       {type: numeric,     nullable: false}
+          currency:    {type: text,        nullable: false, note: "ISO 4217, 3 символа"}
+          valid_from:  {type: timestamptz, nullable: false}
+          valid_to:    {type: timestamptz, nullable: true,  note: "NULL = действует сейчас"}
+          is_current:  {type: boolean,     nullable: false, note: "признак текущей версии"}
+          updated_at:  {type: timestamptz, nullable: false}
+        notes:
+          - "Интервал полуоткрытый: [valid_from, valid_to)."
+          - "Для одной комбинации (sku, price_scope, scope_bk) интервалы не пересекаются."
+          - "is_current обязан быть детерминированным: храните флаг и поддерживайте
+             его триггером либо выводите из valid_to IS NULL. НЕ вычисляйте его через
+             now() в определении представления - иначе отпечатки мастера и реплики
+             разойдутся на строке, чей интервал закончился между двумя чтениями."
+
+  # --------------------------------------------------------------------------
+  pos:
+    database_hint: pos_service_db
+    title: Аптеки и продажи
+    views:
+
+      v_pharmacy:
+        grain: одна аптека
+        min_rows: 30
+        columns:
+          pharmacy_bk:   {type: text,    nullable: false, unique: true}
+          pharmacy_name: {type: text,    nullable: false}
+          region:        {type: text,    nullable: false}
+          city:          {type: text,    nullable: false}
+          address:       {type: text,    nullable: false}
+          opened_at:     {type: date,    nullable: false}
+          closed_at:     {type: date,    nullable: true}
+          is_active:     {type: boolean, nullable: false}
+          updated_at:    {type: timestamptz, nullable: false}
+
+      v_receipt:
+        grain: один кассовый документ (продажа или возврат)
+        min_rows: 20000
+        columns:
+          receipt_bk:        {type: text,        nullable: false, unique: true}
+          pharmacy_bk:       {type: text,        nullable: false}
+          customer_bk:       {type: text,        nullable: true,  note: "NULL для покупки без карты"}
+          cashier_bk:        {type: text,        nullable: false}
+          shift_bk:          {type: text,        nullable: false}
+          receipt_dt:        {type: timestamptz, nullable: false}
+          doc_type:          {type: text,        nullable: false, note: "'sale' | 'refund'"}
+          parent_receipt_bk: {type: text,        nullable: true,  note: "обязателен для 'refund', NULL для 'sale'"}
+          total_amount:      {type: numeric,     nullable: false, note: "для возврата — положительная сумма возврата"}
+          discount_amount:   {type: numeric,     nullable: false}
+          currency:          {type: text,        nullable: false}
+          prescription_bk:   {type: text,        nullable: true,  note: "заполнен, если в чеке есть рецептурная позиция"}
+          updated_at:        {type: timestamptz, nullable: false}
+
+      v_receipt_line:
+        grain: одна позиция кассового документа
+        min_rows: 60000
+        columns:
+          receipt_bk:      {type: text,        nullable: false}
+          line_no:         {type: int,         nullable: false}
+          sku:             {type: text,        nullable: false}
+          batch_bk:        {type: text,        nullable: false, note: "конкретная серия, из которой продано"}
+          quantity:        {type: numeric,     nullable: false}
+          unit_price:      {type: numeric,     nullable: false, note: "цена на момент продажи (snapshot)"}
+          line_discount:   {type: numeric,     nullable: false}
+          line_amount:     {type: numeric,     nullable: false, note: "quantity * unit_price - line_discount"}
+          is_rx_snapshot:  {type: boolean,     nullable: false, note: "признак рецептурности на момент продажи"}
+          sku_name_snapshot: {type: text,      nullable: false, note: "название на момент продажи"}
+          updated_at:      {type: timestamptz, nullable: false}
+        unique_key: [receipt_bk, line_no]
+
+      v_payment:
+        grain: одна оплата по документу
+        min_rows: 20000
+        columns:
+          receipt_bk:     {type: text,        nullable: false}
+          payment_no:     {type: int,         nullable: false}
+          payment_method: {type: text,        nullable: false, note: "'cash' | 'card' | 'bonus' | 'certificate'"}
+          amount:         {type: numeric,     nullable: false}
+          currency:       {type: text,        nullable: false}
+          updated_at:     {type: timestamptz, nullable: false}
+        unique_key: [receipt_bk, payment_no]
+
+  # --------------------------------------------------------------------------
+  wms:
+    database_hint: wms_service_db
+    title: Склад, поставки и движение товара
+    views:
+
+      v_supplier:
+        grain: один поставщик
+        min_rows: 10
+        columns:
+          supplier_bk:   {type: text,        nullable: false, unique: true}
+          supplier_name: {type: text,        nullable: false}
+          country:       {type: text,        nullable: false}
+          is_active:     {type: boolean,     nullable: false}
+          updated_at:    {type: timestamptz, nullable: false}
+
+      v_distribution_center:
+        grain: один распредцентр
+        min_rows: 3
+        columns:
+          dc_bk:      {type: text,        nullable: false, unique: true}
+          dc_name:    {type: text,        nullable: false}
+          region:     {type: text,        nullable: false}
+          city:       {type: text,        nullable: false}
+          is_active:  {type: boolean,     nullable: false}
+          updated_at: {type: timestamptz, nullable: false}
+
+      v_batch:
+        grain: одна партия (серия) товара
+        min_rows: 3000
+        columns:
+          batch_bk:          {type: text,        nullable: false, unique: true}
+          sku:               {type: text,        nullable: false}
+          series_no:         {type: text,        nullable: false, note: "номер серии производителя"}
+          manufactured_date: {type: date,        nullable: false}
+          expiry_date:       {type: date,        nullable: false}
+          received_at:       {type: timestamptz, nullable: false, note: "момент приёмки на склад"}
+          updated_at:        {type: timestamptz, nullable: false}
+        notes:
+          - "Пара (sku, series_no) уникальна."
+
+      v_purchase_line:
+        grain: одна строка закупки у поставщика
+        min_rows: 5000
+        columns:
+          purchase_bk:    {type: text,        nullable: false}
+          line_no:        {type: int,         nullable: false}
+          supplier_bk:    {type: text,        nullable: false}
+          dc_bk:          {type: text,        nullable: false}
+          sku:            {type: text,        nullable: false}
+          batch_bk:       {type: text,        nullable: true,  note: "NULL, если заказ ещё не принят"}
+          ordered_at:     {type: timestamptz, nullable: false}
+          received_at:    {type: timestamptz, nullable: true}
+          quantity:       {type: numeric,     nullable: false}
+          unit_cost:      {type: numeric,     nullable: false}
+          line_cost:      {type: numeric,     nullable: false, note: "quantity * unit_cost"}
+          currency:       {type: text,        nullable: false}
+          updated_at:     {type: timestamptz, nullable: false}
+        unique_key: [purchase_bk, line_no]
+        notes:
+          - "Это представление напрямую питает витрину «Аналитика закупок» в ДЗ3."
+
+      v_movement:
+        grain: одно перемещение партии между локациями
+        min_rows: 20000
+        columns:
+          movement_bk:   {type: text,        nullable: false, unique: true}
+          batch_bk:      {type: text,        nullable: false}
+          sku:           {type: text,        nullable: false}
+          movement_type: {type: text,        nullable: false, note: "'receipt' | 'transfer' | 'sale_writeoff' | 'return' | 'writeoff'"}
+          src_type:      {type: text,        nullable: true,  note: "'dc' | 'pharmacy' | 'supplier'; NULL для приёмки извне"}
+          src_bk:        {type: text,        nullable: true}
+          dst_type:      {type: text,        nullable: true,  note: "'dc' | 'pharmacy' | 'customer'; NULL для списания"}
+          dst_bk:        {type: text,        nullable: true}
+          qty:           {type: numeric,     nullable: false}
+          dispatched_at: {type: timestamptz, nullable: true,  note: "момент отгрузки из источника"}
+          moved_at:      {type: timestamptz, nullable: false, note: "момент приёмки получателем"}
+          updated_at:    {type: timestamptz, nullable: false}
+        notes:
+          - "Это представление напрямую питает витрину «Доставка по складам» в ДЗ3:"
+          - "разница moved_at - dispatched_at даёт время обработки."
+
+      v_stock:
+        grain: остаток партии в локации на текущий момент
+        min_rows: 5000
+        columns:
+          location_type: {type: text,        nullable: false, note: "'dc' | 'pharmacy'"}
+          location_bk:   {type: text,        nullable: false}
+          sku:           {type: text,        nullable: false}
+          batch_bk:      {type: text,        nullable: false}
+          qty_on_hand:   {type: numeric,     nullable: false}
+          updated_at:    {type: timestamptz, nullable: false}
+        unique_key: [location_type, location_bk, batch_bk]
+
+# ============================================================================
+#  ПРОВЕРКИ ВНУТРИ ОДНОГО СЕРВИСА
+#  Каждая возвращает число нарушений. Ноль — проверка пройдена.
+# ============================================================================
+
+sql_checks:
+
+  - id: C01
+    service: pos
+    title: Сумма чека совпадает с суммой позиций
+    sql: |
+      SELECT count(*) FROM (
+        SELECT r.receipt_bk
+        FROM contract.v_receipt r
+        JOIN contract.v_receipt_line l ON l.receipt_bk = r.receipt_bk
+        GROUP BY r.receipt_bk, r.total_amount
+        HAVING round(sum(l.line_amount), 2) <> round(max(r.total_amount), 2)
+      ) q
+
+  - id: C02
+    service: pos
+    title: Сумма оплат совпадает с суммой документа
+    sql: |
+      SELECT count(*) FROM (
+        SELECT r.receipt_bk
+        FROM contract.v_receipt r
+        JOIN contract.v_payment p ON p.receipt_bk = r.receipt_bk
+        GROUP BY r.receipt_bk, r.total_amount
+        HAVING round(sum(p.amount), 2) <> round(max(r.total_amount), 2)
+      ) q
+
+  - id: C03
+    service: pos
+    title: line_amount = quantity * unit_price - line_discount
+    sql: |
+      SELECT count(*)
+      FROM contract.v_receipt_line
+      WHERE round(line_amount, 2) <> round(quantity * unit_price - line_discount, 2)
+
+  - id: C04
+    service: pos
+    title: Рецептурная позиция не продана без рецепта
+    sql: |
+      SELECT count(*)
+      FROM contract.v_receipt_line l
+      JOIN contract.v_receipt r ON r.receipt_bk = l.receipt_bk
+      WHERE l.is_rx_snapshot AND r.prescription_bk IS NULL
+
+  - id: C05
+    service: pos
+    title: У возврата есть родительский документ, у продажи - нет
+    sql: |
+      SELECT count(*)
+      FROM contract.v_receipt
+      WHERE (doc_type = 'refund' AND parent_receipt_bk IS NULL)
+         OR (doc_type = 'sale'   AND parent_receipt_bk IS NOT NULL)
+
+  - id: C06
+    service: pos
+    title: Возврат не превышает проданное количество
+    sql: |
+      SELECT count(*) FROM (
+        SELECT rl.sku, r.parent_receipt_bk,
+               sum(rl.quantity) AS returned,
+               (SELECT sum(sl.quantity)
+                  FROM contract.v_receipt_line sl
+                 WHERE sl.receipt_bk = r.parent_receipt_bk
+                   AND sl.sku = rl.sku) AS sold
+        FROM contract.v_receipt r
+        JOIN contract.v_receipt_line rl ON rl.receipt_bk = r.receipt_bk
+        WHERE r.doc_type = 'refund'
+        GROUP BY rl.sku, r.parent_receipt_bk
+      ) q
+      WHERE sold IS NULL OR returned > sold
+
+  - id: C07
+    service: pos
+    title: Все позиции ссылаются на существующий документ
+    sql: |
+      SELECT count(*)
+      FROM contract.v_receipt_line l
+      LEFT JOIN contract.v_receipt r ON r.receipt_bk = l.receipt_bk
+      WHERE r.receipt_bk IS NULL
+
+  - id: C08
+    service: pos
+    title: Чек ссылается на существующую аптеку
+    sql: |
+      SELECT count(*)
+      FROM contract.v_receipt r
+      LEFT JOIN contract.v_pharmacy p ON p.pharmacy_bk = r.pharmacy_bk
+      WHERE p.pharmacy_bk IS NULL
+
+  - id: C09
+    service: catalog
+    title: Интервалы действия цены не пересекаются
+    sql: |
+      SELECT count(*)
+      FROM contract.v_price a
+      JOIN contract.v_price b
+        ON  a.sku = b.sku
+        AND a.price_scope = b.price_scope
+        AND a.scope_bk = b.scope_bk
+        AND a.valid_from < b.valid_from
+      WHERE tstzrange(a.valid_from, a.valid_to, '[)')
+         && tstzrange(b.valid_from, b.valid_to, '[)')
+
+  - id: C10
+    service: catalog
+    title: У цены ровно одна текущая версия на область действия
+    sql: |
+      SELECT count(*) FROM (
+        SELECT sku, price_scope, scope_bk
+        FROM contract.v_price
+        WHERE is_current
+        GROUP BY sku, price_scope, scope_bk
+        HAVING count(*) > 1
+      ) q
+
+  - id: C11
+    service: catalog
+    title: is_current согласован с valid_to
+    sql: |
+      -- закрытый в прошлом интервал не может быть текущим,
+      -- открытый интервал обязан быть текущим.
+      -- Версия с valid_to в будущем (запланированная цена) допустима как текущая.
+      SELECT count(*)
+      FROM contract.v_price
+      WHERE (is_current AND valid_to IS NOT NULL AND valid_to <= now())
+         OR (NOT is_current AND valid_to IS NULL)
+
+  - id: C12
+    service: catalog
+    title: Цены положительны, валюта - трёхбуквенный код
+    sql: |
+      SELECT count(*)
+      FROM contract.v_price
+      WHERE price <= 0 OR length(currency) <> 3 OR currency <> upper(currency)
+
+  - id: C13
+    service: wms
+    title: Срок годности строго позже даты производства
+    sql: |
+      SELECT count(*) FROM contract.v_batch WHERE expiry_date <= manufactured_date
+
+  - id: C14
+    service: wms
+    title: Пара (sku, series_no) уникальна
+    sql: |
+      SELECT count(*) FROM (
+        SELECT sku, series_no FROM contract.v_batch
+        GROUP BY sku, series_no HAVING count(*) > 1
+      ) q
+
+  - id: C15
+    service: wms
+    title: Остатки неотрицательны
+    sql: |
+      SELECT count(*) FROM contract.v_stock WHERE qty_on_hand < 0
+
+  - id: C16
+    service: wms
+    title: Перемещение - источник не равен получателю, количество положительно
+    sql: |
+      SELECT count(*)
+      FROM contract.v_movement
+      WHERE qty <= 0
+         OR (src_type = dst_type AND src_bk = dst_bk)
+         OR (src_type IS NULL AND dst_type IS NULL)
+
+  - id: C17
+    service: wms
+    title: Отгрузка не позже приёмки
+    sql: |
+      SELECT count(*)
+      FROM contract.v_movement
+      WHERE dispatched_at IS NOT NULL AND dispatched_at > moved_at
+
+  - id: C18
+    service: wms
+    title: line_cost = quantity * unit_cost, количество и цена положительны
+    sql: |
+      SELECT count(*)
+      FROM contract.v_purchase_line
+      WHERE round(line_cost, 2) <> round(quantity * unit_cost, 2)
+         OR quantity <= 0 OR unit_cost < 0
+
+  - id: C19
+    service: wms
+    title: Принятая строка закупки имеет партию и дату приёмки
+    sql: |
+      SELECT count(*)
+      FROM contract.v_purchase_line
+      WHERE (received_at IS NOT NULL) <> (batch_bk IS NOT NULL)
+
+  - id: C20
+    service: wms
+    title: Перемещения и остатки ссылаются на существующие партии
+    sql: |
+      SELECT
+        (SELECT count(*) FROM contract.v_movement m
+           LEFT JOIN contract.v_batch b ON b.batch_bk = m.batch_bk
+          WHERE b.batch_bk IS NULL)
+      + (SELECT count(*) FROM contract.v_stock s
+           LEFT JOIN contract.v_batch b ON b.batch_bk = s.batch_bk
+          WHERE b.batch_bk IS NULL)
+
+  - id: C21
+    service: crm
+    title: Карта ссылается на существующего клиента
+    sql: |
+      SELECT count(*)
+      FROM contract.v_loyalty_card c
+      LEFT JOIN contract.v_customer u ON u.customer_bk = c.customer_bk
+      WHERE u.customer_bk IS NULL
+
+  - id: C22
+    service: crm
+    title: У клиента не больше одной активной карты
+    sql: |
+      SELECT count(*) FROM (
+        SELECT customer_bk FROM contract.v_loyalty_card
+        WHERE status = 'active'
+        GROUP BY customer_bk HAVING count(*) > 1
+      ) q
+
+  - id: C23
+    service: crm
+    title: Бонусный баланс неотрицателен, закрытая карта не активна
+    sql: |
+      SELECT count(*)
+      FROM contract.v_loyalty_card
+      WHERE bonus_balance < 0
+         OR (closed_at IS NOT NULL AND status = 'active')
+
+# ============================================================================
+#  КРОСС-СЕРВИСНЫЕ ПРОВЕРКИ
+#  Выполняются чекером на стороне преподавателя (данные тянутся из разных БД).
+#  Реализация — в scripts/hw01_check.py по этим id.
+# ============================================================================
+
+cross_checks:
+
+  - id: X01
+    title: Все проданные SKU есть в каталоге
+    kind: referential
+    left:  {service: pos, view: v_receipt_line, column: sku}
+    right: {service: catalog, view: v_sku, column: sku}
+
+  - id: X02
+    title: Все закупленные SKU есть в каталоге
+    kind: referential
+    left:  {service: wms, view: v_purchase_line, column: sku}
+    right: {service: catalog, view: v_sku, column: sku}
+
+  - id: X03
+    title: Все партии ссылаются на существующий SKU
+    kind: referential
+    left:  {service: wms, view: v_batch, column: sku}
+    right: {service: catalog, view: v_sku, column: sku}
+
+  - id: X04
+    title: Клиенты чеков есть в CRM
+    kind: referential
+    left:  {service: pos, view: v_receipt, column: customer_bk}
+    right: {service: crm, view: v_customer, column: customer_bk}
+
+  - id: X05
+    title: Партии в позициях чеков есть на складе
+    kind: referential
+    left:  {service: pos, view: v_receipt_line, column: batch_bk}
+    right: {service: wms, view: v_batch, column: batch_bk}
+
+  - id: X06
+    title: Аптеки-получатели перемещений есть в POS
+    kind: referential_filtered
+    left:  {service: wms, view: v_movement, column: dst_bk, where: "dst_type = 'pharmacy'"}
+    right: {service: pos, view: v_pharmacy, column: pharmacy_bk}
+
+  - id: X07
+    title: Не продано ничего из партии с истёкшим сроком годности
+    kind: python
+    description: >
+      Для каждой позиции чека: дата чека не позже expiry_date её партии.
+
+  - id: X08
+    title: На момент продажи существовала действующая цена SKU
+    kind: python
+    description: >
+      Для выборки позиций чеков: найдётся версия цены в v_price, чей интервал
+      [valid_from, valid_to) накрывает receipt_dt чека, для области действия
+      chain / region аптеки / самой аптеки.
+
+  - id: X09
+    title: SKU в позиции чека совпадает с SKU партии
+    kind: python
+    description: >
+      v_receipt_line.sku = v_batch.sku для той же batch_bk.
+
+  - id: X10
+    title: Признак рецептурности в snapshot не противоречит каталогу
+    kind: python
+    description: >
+      Если в каталоге is_rx = true, то is_rx_snapshot тоже true для всех продаж
+      после последнего изменения признака. Проверяется мягко: доля расхождений
+      не выше 5% (препарат мог сменить статус).
+    tolerance_pct: 5
+
+# ============================================================================
+#  ТРЕБОВАНИЯ К CDC-ГОТОВНОСТИ (проверяются на мастере каждого сервиса)
+# ============================================================================
+
+cdc_requirements:
+  wal_level: logical
+  publication_required: true
+  publication_must_cover_all_base_tables: true
+  replica_identity_allowed: [d, f, i]   # default(есть PK) | full | index
+  forbidden_replica_identity: [n]       # nothing

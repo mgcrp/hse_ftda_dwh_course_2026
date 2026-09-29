@@ -1,0 +1,111 @@
+# ============================================================================
+#  hw01_submission.yaml — манифест сдачи ДЗ №1
+#
+#  Файл обязан лежать в КОРНЕ вашего репозитория и называться именно так.
+#  Именно по нему преподаватель запускает автоматическую проверку:
+#
+#      python hw01_check.py --submission ./hw01_submission.yaml
+#
+#  Прогоните чекер у себя до сдачи. Он отдан вам вместе с заданием,
+#  скрытых проверок нет.
+# ============================================================================
+
+team:
+  members:
+    - "Иванова Анна Сергеевна"
+    - "Петров Пётр Петрович"
+  github_logins:
+    - "annaivanova"
+    - "ppetrov"
+  solo: false            # true, если сдаёте в одиночку (+2 балла)
+
+# ----------------------------------------------------------------------------
+# Как поднять стенд. Команды выполняются из корня репозитория.
+# ----------------------------------------------------------------------------
+entrypoint:
+  up: "docker compose up -d"
+  # команда должна завершиться ТОЛЬКО когда все базы готовы принимать запросы
+  wait_ready: "./scripts/wait_ready.sh"
+  # генерация и загрузка данных; должна быть идемпотентной и детерминированной
+  seed: "./scripts/seed.sh --seed 42"
+  # догенерация порции данных поверх существующих - нужна для проверки реплики
+  seed_delta: "./scripts/seed.sh --seed 777 --receipts 500"
+  down: "docker compose down -v"
+
+# ----------------------------------------------------------------------------
+# Подключения. Пользователь checker должен иметь права только на SELECT
+# в схеме contract (и на выполнение негативных тестов - см. ниже).
+# ----------------------------------------------------------------------------
+connections:
+  master:
+    crm:     "postgresql://checker:checker@localhost:6432/crm_service_db"
+    catalog: "postgresql://checker:checker@localhost:6432/catalog_service_db"
+    pos:     "postgresql://checker:checker@localhost:6432/pos_service_db"
+    wms:     "postgresql://checker:checker@localhost:6432/wms_service_db"
+  # реплика: те же базы на реплике/standby. Обязательно для базовой части.
+  replica:
+    crm:     "postgresql://checker:checker@localhost:6433/crm_service_db"
+    catalog: "postgresql://checker:checker@localhost:6433/catalog_service_db"
+    pos:     "postgresql://checker:checker@localhost:6433/pos_service_db"
+    wms:     "postgresql://checker:checker@localhost:6433/wms_service_db"
+  # суперпользовательское подключение к мастеру - для проверки wal_level,
+  # publication, replica identity, pg_stat_replication
+  admin:
+    crm:     "postgresql://postgres:postgres@localhost:5432/crm_service_db"
+    catalog: "postgresql://postgres:postgres@localhost:5432/catalog_service_db"
+    pos:     "postgresql://postgres:postgres@localhost:5432/pos_service_db"
+    wms:     "postgresql://postgres:postgres@localhost:5432/wms_service_db"
+  # подключение, под которым выполняются негативные тесты
+  # (нужны права на запись; чекер всё откатывает)
+  writer:
+    crm:     "postgresql://app:app@localhost:6432/crm_service_db"
+    catalog: "postgresql://app:app@localhost:6432/catalog_service_db"
+    pos:     "postgresql://app:app@localhost:6432/pos_service_db"
+    wms:     "postgresql://app:app@localhost:6432/wms_service_db"
+
+# ----------------------------------------------------------------------------
+# Инварианты. service - в какой базе выполнять тест.
+# expect_sqlstate - код, который вы ПРОВЕРИЛИ экспериментально.
+# ----------------------------------------------------------------------------
+invariants:
+  I1:  {service: catalog, file: "tests/invariants/I1_bk_unique.sql",        expect_sqlstate: "23505"}
+  I2:  {service: catalog, file: "tests/invariants/I2_bk_immutable.sql",     expect_sqlstate: "P0001"}
+  I3:  {service: pos,     file: "tests/invariants/I3_receipt_total.sql",    expect_sqlstate: "P0001"}
+  I4:  {service: pos,     file: "tests/invariants/I4_line_math.sql",        expect_sqlstate: "23514"}
+  I5:  {service: catalog, file: "tests/invariants/I5_price_overlap.sql",    expect_sqlstate: "23P01"}
+  I6:  {service: catalog, file: "tests/invariants/I6_single_current.sql",   expect_sqlstate: "23505"}
+  I7:  {service: wms,     file: "tests/invariants/I7_stock_negative.sql",   expect_sqlstate: "23514"}
+  I8:  {service: pos,     file: "tests/invariants/I8_sell_expired.sql",     expect_sqlstate: "P0001"}
+  I9:  {service: wms,     file: "tests/invariants/I9_receive_expired.sql",  expect_sqlstate: "P0001"}
+  I10: {service: pos,     file: "tests/invariants/I10_rx_no_script.sql",    expect_sqlstate: "23514"}
+  I11: {service: pos,     file: "tests/invariants/I11_refund_excess.sql",   expect_sqlstate: "P0001"}
+  I12: {service: pos,     file: "tests/invariants/I12_payment_total.sql",   expect_sqlstate: "P0001"}
+
+positive_tests:
+  P1: {service: catalog, file: "tests/invariants/P1_updated_at.sql"}
+  P2: {service: crm,     file: "tests/invariants/P2_soft_delete.sql"}
+
+# ----------------------------------------------------------------------------
+# Отказоустойчивость.
+#   mode: none    - только мастер
+#         replica - мастер + физическая реплика (минимум для базовой части)
+#         patroni - HA-кластер Patroni + etcd + HAProxy
+# ----------------------------------------------------------------------------
+ha:
+  mode: "patroni"
+  pooler_dsn: "postgresql://checker:checker@localhost:6432/pos_service_db"
+  haproxy_rw_dsn: "postgresql://checker:checker@localhost:5000/pos_service_db"
+  haproxy_ro_dsn: "postgresql://checker:checker@localhost:5001/pos_service_db"
+  patroni_api: "http://localhost:8008"
+  expected_members: 3
+  journal: "docs/failover_journal.md"
+
+# ----------------------------------------------------------------------------
+# Документация
+# ----------------------------------------------------------------------------
+docs:
+  readme: "README.md"
+  erd: "docs/erd/"                      # ER-диаграммы четырёх сервисов
+  adr: "docs/adr/"                      # журнал решений, >= 5 записей
+  dwh_mapping: "docs/dwh_mapping.md"    # карта склейки источников для ДЗ2
+  sources_log: "docs/sources.md"        # лог внешних источников кода
