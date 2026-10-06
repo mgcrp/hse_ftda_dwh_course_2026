@@ -19,7 +19,7 @@ O_{итоговая} = ¼ O_{ДЗ 1} + ¼ O_{ДЗ 2} + ¼ O_{ДЗ 3} + ¼ O_{Д�
 | 1  | 08.09.2026 | Семинар | Знакомство с PostgreSQL; Docker-compose;                           | [План семинара](week01/sem/README.md) |
 | 2  | 15.09.2026 | Семинар | Отказоустойчивость СУБД; Репликация, Connection pooler, HA-cluster | [Слайды](week02/week02_ha.pdf) |
 | 2  | 15.09.2026 | Семинар | Отказоустойчивость СУБД; Репликация, Connection pooler, HA-cluster | [План семинара](week02/sem/README.md) |
-| 3  | 22.09.2026 | Семинар | MPP; GreenPlum;                                                    | [Слайды](week02/week03_mpp.pdf) |
+| 3  | 22.09.2026 | Лекция  | MPP;                                                               | [Слайды](week03/week03_mpp.pdf) |
 | 3  | 22.09.2026 | Семинар | Знакомство с GreenPlum;                                            | [План семинара](week03/sem/demo1_gp/README.md) |
 
 Сроки домашнего задания:
