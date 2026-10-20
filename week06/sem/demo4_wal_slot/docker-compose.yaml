@@ -1,0 +1,19 @@
+services:
+  # Обычный Postgres. Для логического слота нужен только wal_level=logical
+  postgres:
+    image: postgres:13
+    container_name: postgres
+    hostname: postgres
+    ports:
+      - '5432:5432'
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+    command: ['postgres', '-c', 'wal_level=logical']
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -h localhost -U postgres']
+      start_period: 10s
+      interval: 5s
+      timeout: 5s
+      retries: 10
