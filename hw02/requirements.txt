@@ -1,0 +1,5 @@
+PyYAML>=6,<7
+psycopg2-binary>=2.9,<3
+PyMySQL>=1.1,<2
+trino>=0.334,<1
+confluent-kafka>=2.6,<3

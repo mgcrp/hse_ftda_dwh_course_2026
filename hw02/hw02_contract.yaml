@@ -1,0 +1,185 @@
+# Публичный интерфейс DDS и диагностических представлений.
+# timestamptz: timestamp с часовым поясом или timestamp/datetime в UTC.
+# numeric: точный DECIMAL/NUMERIC. boolean: BOOLEAN или 0/1 в StarRocks.
+# source — эталон ДЗ1. Для v_sale_line добавляется заголовок из pos.v_receipt.
+version: 1
+homework: hw02
+schema: contract_dwh
+views:
+
+  v_sale_line:
+    key: [receipt_bk, line_no]
+    source: pos.v_receipt_line
+    min_rows: 60000
+    columns:
+      receipt_bk: {type: text, nullable: false}
+      line_no: {type: int, nullable: false}
+      sku: {type: text, nullable: false}
+      batch_bk: {type: text, nullable: false}
+      quantity: {type: numeric, nullable: false}
+      unit_price: {type: numeric, nullable: false}
+      line_discount: {type: numeric, nullable: false}
+      line_amount: {type: numeric, nullable: false}
+      is_rx_snapshot: {type: boolean, nullable: false}
+      sku_name_snapshot: {type: text, nullable: false}
+      pharmacy_bk: {type: text, nullable: false}
+      customer_bk: {type: text, nullable: true}
+      receipt_dt: {type: timestamptz, nullable: false}
+      doc_type: {type: text, nullable: false}
+      parent_receipt_bk: {type: text, nullable: true}
+      currency: {type: text, nullable: false}
+
+  v_purchase_line:
+    key: [purchase_bk, line_no]
+    source: wms.v_purchase_line
+    min_rows: 5000
+    columns:
+      purchase_bk: {type: text, nullable: false}
+      line_no: {type: int, nullable: false}
+      supplier_bk: {type: text, nullable: false}
+      dc_bk: {type: text, nullable: false}
+      sku: {type: text, nullable: false}
+      batch_bk: {type: text, nullable: true}
+      ordered_at: {type: timestamptz, nullable: false}
+      received_at: {type: timestamptz, nullable: true}
+      quantity: {type: numeric, nullable: false}
+      unit_cost: {type: numeric, nullable: false}
+      line_cost: {type: numeric, nullable: false}
+      currency: {type: text, nullable: false}
+
+  v_movement:
+    key: [movement_bk]
+    source: wms.v_movement
+    min_rows: 20000
+    columns:
+      movement_bk: {type: text, nullable: false}
+      batch_bk: {type: text, nullable: false}
+      sku: {type: text, nullable: false}
+      movement_type: {type: text, nullable: false}
+      src_type: {type: text, nullable: true}
+      src_bk: {type: text, nullable: true}
+      dst_type: {type: text, nullable: true}
+      dst_bk: {type: text, nullable: true}
+      qty: {type: numeric, nullable: false}
+      dispatched_at: {type: timestamptz, nullable: true}
+      moved_at: {type: timestamptz, nullable: false}
+
+  v_sku:
+    key: [sku]
+    source: catalog.v_sku
+    min_rows: 500
+    columns:
+      sku: {type: text, nullable: false}
+      sku_name: {type: text, nullable: false}
+      inn_name: {type: text, nullable: true}
+      manufacturer_name: {type: text, nullable: false}
+      drug_form: {type: text, nullable: true}
+      category: {type: text, nullable: false}
+      is_rx: {type: boolean, nullable: false}
+      is_vital: {type: boolean, nullable: false}
+      pack_qty: {type: numeric, nullable: false}
+      is_active: {type: boolean, nullable: false}
+
+  v_customer:
+    key: [customer_bk]
+    source: crm.v_customer
+    min_rows: 2000
+    columns:
+      customer_bk: {type: text, nullable: false}
+      birth_year: {type: int, nullable: true}
+      sex: {type: text, nullable: true}
+      city: {type: text, nullable: true}
+      region: {type: text, nullable: true}
+      loyalty_level: {type: text, nullable: true}
+      marketing_opt_in: {type: boolean, nullable: false}
+      registered_at: {type: timestamptz, nullable: false}
+
+  v_pharmacy:
+    key: [pharmacy_bk]
+    source: pos.v_pharmacy
+    min_rows: 30
+    columns:
+      pharmacy_bk: {type: text, nullable: false}
+      pharmacy_name: {type: text, nullable: false}
+      region: {type: text, nullable: false}
+      city: {type: text, nullable: false}
+      address: {type: text, nullable: false}
+      opened_at: {type: date, nullable: false}
+      closed_at: {type: date, nullable: true}
+      is_active: {type: boolean, nullable: false}
+
+  v_batch:
+    key: [batch_bk]
+    source: wms.v_batch
+    min_rows: 3000
+    columns:
+      batch_bk: {type: text, nullable: false}
+      sku: {type: text, nullable: false}
+      series_no: {type: text, nullable: false}
+      manufactured_date: {type: date, nullable: false}
+      expiry_date: {type: date, nullable: false}
+      received_at: {type: timestamptz, nullable: false}
+
+  v_supplier:
+    key: [supplier_bk]
+    source: wms.v_supplier
+    min_rows: 10
+    columns:
+      supplier_bk: {type: text, nullable: false}
+      supplier_name: {type: text, nullable: false}
+      country: {type: text, nullable: false}
+      is_active: {type: boolean, nullable: false}
+
+  v_distribution_center:
+    key: [dc_bk]
+    source: wms.v_distribution_center
+    min_rows: 3
+    columns:
+      dc_bk: {type: text, nullable: false}
+      dc_name: {type: text, nullable: false}
+      region: {type: text, nullable: false}
+      city: {type: text, nullable: false}
+      is_active: {type: boolean, nullable: false}
+
+  v_price_history:
+    key: [sku, price_scope, scope_bk, valid_from]
+    source: catalog.v_price
+    min_rows: 1500
+    columns:
+      sku: {type: text, nullable: false}
+      price_scope: {type: text, nullable: false}
+      scope_bk: {type: text, nullable: false}
+      price: {type: numeric, nullable: false}
+      currency: {type: text, nullable: false}
+      valid_from: {type: timestamptz, nullable: false}
+      valid_to: {type: timestamptz, nullable: true}
+      is_current: {type: boolean, nullable: false}
+
+  v_sku_history:
+    key: [sku, valid_from]
+    columns:
+      sku: {type: text, nullable: false}
+      sku_name: {type: text, nullable: false}
+      category: {type: text, nullable: false}
+      is_rx: {type: boolean, nullable: false}
+      valid_from: {type: timestamptz, nullable: false}
+      valid_to: {type: timestamptz, nullable: true}
+
+  v_cdc_events:
+    key: [topic, partition_id, kafka_offset]
+    columns:
+      source_system: {type: text, nullable: false}
+      source_table: {type: text, nullable: false}
+      event_key: {type: text, nullable: false}
+      op: {type: text, nullable: false}
+      topic: {type: text, nullable: false}
+      partition_id: {type: int, nullable: false}
+      kafka_offset: {type: int, nullable: false}
+      ingested_at: {type: timestamptz, nullable: false}
+
+  v_load_batches:
+    key: [batch_id]
+    columns:
+      batch_id: {type: text, nullable: false}
+      offsets_json: {type: text, nullable: false}
+      status: {type: text, nullable: false}
