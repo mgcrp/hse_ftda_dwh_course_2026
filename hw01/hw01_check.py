@@ -852,15 +852,20 @@ def check_ha(db: Db, sub: dict, rep: Report) -> None:
             members = data.get("members", [])
             roles = [(m.get("name"), m.get("role"), m.get("state")) for m in members]
             leaders = [m for m in members if m.get("role") == "leader"]
-            running = [m for m in members if m.get("state") == "running"]
+            # /cluster in newer Patroni versions reports a healthy replica's
+            # WAL receiver state (streaming) instead of PostgreSQL's running.
+            healthy = [m for m in members
+                       if m.get("state") == "running"
+                       or (m.get("role") == "replica" and m.get("state") == "streaming")]
             rep.add("ha", "members", f"в кластере {expected} узлов",
                     len(members) >= expected,
                     "; ".join(f"{n}:{r}/{s}" for n, r, s in roles))
             rep.add("ha", "leader", "ровно один лидер", len(leaders) == 1,
                     f"лидеров: {len(leaders)}")
-            rep.add("ha", "running", "все узлы в состоянии running",
-                    len(running) == len(members),
-                    f"running {len(running)} из {len(members)}")
+            rep.add("ha", "running", "все узлы работоспособны (running / streaming у реплик)",
+                    bool(members) and len(healthy) == len(members),
+                    f"работоспособны {len(healthy)} из {len(members)}; "
+                    + "; ".join(f"{n}:{r}/{s}" for n, r, s in roles))
         except (urllib.error.URLError, OSError, ValueError) as e:
             rep.add("ha", "api", "Patroni REST API отвечает", False, str(e))
     else:
