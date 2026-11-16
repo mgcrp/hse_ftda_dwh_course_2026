@@ -1,0 +1,55 @@
+version: 1
+
+team:
+  github_logins: [example]
+  solo: true
+
+# DSN пользователей с правами на чтение контрактов ДЗ1.
+sources:
+  crm: HW02_CRM_DSN
+  catalog: HW02_CATALOG_DSN
+  pos: HW02_POS_DSN
+  wms: HW02_WMS_DSN
+
+target:
+  engine: greenplum
+  dsn_env: HW02_DWH_DSN
+
+# Вариант StarRocks. contract_dwh — имя базы в default_catalog.
+# target:
+#   engine: starrocks
+#   host: localhost
+#   port: 9030
+#   user: checker
+#   password_env: HW02_DWH_PASSWORD
+
+# Вариант Trino. contract_dwh — схема в указанном каталоге Iceberg.
+# target:
+#   engine: trino
+#   host: localhost
+#   port: 8080
+#   user: checker
+#   catalog: iceberg
+#   http_scheme: http
+#   # Для Basic auth используйте https и password_env.
+#   # password_env: HW02_DWH_PASSWORD
+
+# Для режима --scenario. Перечислите все топики с событиями,
+# которые возвращает check_fixture. Имена ниже только для примера.
+kafka:
+  bootstrap_servers: localhost:9092
+  topics:
+    crm.public.customer: {service: crm, table: public.customer}
+    catalog.public.sku: {service: catalog, table: public.sku}
+    catalog.public.price: {service: catalog, table: public.price}
+    pos.public.receipt: {service: pos, table: public.receipt}
+    pos.public.receipt_line: {service: pos, table: public.receipt_line}
+    wms.public.purchase_line: {service: wms, table: public.purchase_line}
+    wms.public.movement: {service: wms, table: public.movement}
+
+# Списки аргументов запускаются из каталога манифеста без shell.
+# Чекер передаёт fixture batch_id в JSON и тот же ID команде load
+# через --batch-id. При повторе дополнительно передаётся --replay.
+commands:
+  fixture: [./scripts/check_fixture]
+  load: [./scripts/load_dds]
